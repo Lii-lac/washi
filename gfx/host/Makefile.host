@@ -1,0 +1,8 @@
+# PC screenshot tool for the mockup screens (no Switch needed):
+#   make -f Makefile.host && mkdir -p ../out && ./render_host ../out
+CC ?= gcc
+CFLAGS ?= -std=gnu11 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function
+GFX = ../../source/gfx
+SRC = render_host.c ../scenes.c $(GFX)/gfx.c $(GFX)/skin.c $(GFX)/fontdata.c $(GFX)/gfx_image.c $(GFX)/paper.c
+render_host: $(SRC) $(GFX)/gfx.h $(GFX)/skin.h $(GFX)/paper.h ../scenes.h
+	$(CC) $(CFLAGS) -I$(GFX) -I../../source -I.. -o $@ $(SRC) -lm
