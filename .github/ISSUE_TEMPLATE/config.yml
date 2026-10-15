@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: "Report a security problem"
+    url: "https://github.com/Lii-lac/washi/security/advisories/new"
+    about: "Found a vulnerability? Report it privately, not as a public issue."
+  - name: "Check how it should work"
+    url: "https://github.com/Lii-lac/washi/blob/main/docs/reference.md"
+    about: "Not sure whether it's a bug? The reference lists every screen, button, setting and limit."
+  - name: "Build or test problems"
+    url: "https://github.com/Lii-lac/washi/blob/main/docs/building.md"
+    about: "Trouble building Washi or running the PC tests? The building guide covers both."

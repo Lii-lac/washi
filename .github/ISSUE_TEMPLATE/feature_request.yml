@@ -1,0 +1,40 @@
+name: "Feature request"
+description: "An idea that would make Washi better for the club. Start with the problem it would solve."
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Got an idea? Pin it up here. The most useful part is the problem it solves, so start there. The exact change can come later.
+
+        Please keep passwords and save files out of it. Found a security problem? Use **Report a security problem** on the New issue page instead.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: "What problem would this solve?"
+      description: "What are you trying to do, and what gets in the way? Describe the situation rather than the fix."
+      placeholder: "e.g. With lots of profiles, I scroll past my name more than once before I find it."
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: "What would you like to happen?"
+      description: "Describe the change in your own words. A rough idea is fine."
+      placeholder: "e.g. A bigger text option for the Activity log."
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: "What do you do instead, or what have you tried?"
+      description: "A workaround, another app, or a setting that comes close is useful to know."
+
+  - type: checkboxes
+    id: help
+    attributes:
+      label: "Can you help?"
+      options:
+        - label: "I'd be happy to test a new build on a console."

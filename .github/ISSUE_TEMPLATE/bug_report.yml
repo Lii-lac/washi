@@ -1,0 +1,129 @@
+name: "Bug report"
+description: "Something broke, froze, or didn't do what it should, such as a swap that stopped part-way."
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this. A short, tidy note, stuck down neatly, gets fixed fastest.
+
+        **Never paste a password or a save file here.** That means a profile's 6-digit password, the admin password, or anything from a save folder. If you're not sure whether something is private, leave it out.
+
+        Found a security problem? Please don't post it here. Use **Report a security problem** on the New issue page instead.
+
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: "What happened?"
+      description: "In your own words. If the screen showed a message, copy it word for word. If you can, say who was loaded: Nobody, Guest, or a profile name."
+      placeholder: "e.g. I chose Sam and pressed Switch. The bar stopped at about half, then Washi went back to Home."
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: "Steps to reproduce"
+      description: "Numbered steps, from opening Washi to the problem. Say whether it happens every time or only sometimes."
+      placeholder: |
+        1. Open Washi from the Homebrew Menu
+        2. Press A on Eli's tile, then Switch
+        3. Wait for the bar to finish
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: "What did you expect?"
+      description: "One sentence is plenty."
+      placeholder: "e.g. I expected Sam's saves to load, and the bar to finish with 'You're playing as Sam'."
+
+  - type: dropdown
+    id: doing
+    attributes:
+      label: "What were you doing?"
+      description: "Pick the closest one. The steps above fill in the rest."
+      options:
+        - "Switching to someone else"
+        - "Signing out"
+        - "Making or editing a profile"
+        - "Backups (in Admin)"
+        - "Another Admin page"
+        - "The Home screen (browsing, searching, sorting)"
+        - "Opening Washi"
+        - "The in-game sign-out reminder"
+        - "Something else"
+
+  - type: input
+    id: washi_version
+    attributes:
+      label: "Washi version"
+      description: "Shown on the About page (press Minus on the Home screen) and at the top of Admin. 'Latest' isn't a version number."
+      placeholder: "e.g. 1.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: system_firmware
+    attributes:
+      label: "System firmware version"
+      description: "Shown in System Settings. Write 'not sure' if you can't find it."
+      placeholder: "e.g. 21.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: atmosphere_version
+    attributes:
+      label: "Atmosphere version (custom firmware)"
+      description: "The version of Atmosphere you run. Write 'not sure' if you don't know."
+      placeholder: "e.g. 1.8.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: console_model
+    attributes:
+      label: "Console model"
+      options:
+        - "Switch (original)"
+        - "Switch (OLED model)"
+        - "Switch Lite"
+        - "Something else"
+
+  - type: dropdown
+    id: start_method
+    attributes:
+      label: "How did you start Washi?"
+      description: "If it works one way but not another, that is really useful to know."
+      options:
+        - "Homebrew Menu, holding R while a game opens (full application mode)"
+        - "Homebrew Menu, opened from the Album (applet mode)"
+        - "Washi's Home-menu icon (the forwarder)"
+        - "Not sure"
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: "Washi's log, or a screenshot or photo"
+      description: |
+        On the SD card, open `switch`, then `washi`. The file is `log.txt`. `log.old` is the one before it, so add it too if the problem happened a while ago.
+
+        Drag the file into this box, or paste a short part of it in a code block. A photo of the screen works too. No SD card access? Admin, then Games and saves, then Activity log shows the last 300 lines (times are UTC).
+
+        **Check the log before you attach it, for passwords and save files.** It may also show profile and game names.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: "Before you send it"
+      options:
+        - label: "I looked for an existing issue about this and didn't find one."
+        - label: "There are no passwords or save files in this report."
+          required: true
+
+  - type: markdown
+    attributes:
+      value: "Thanks for helping keep everyone's saves safe."
