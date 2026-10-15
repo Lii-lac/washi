@@ -1,0 +1,28 @@
+# The progress roll (source/gfx/paper_roll.c) on its own: `make -f Makefile.roll` runs the checks (with ASan/UBSan);
+# `make -f Makefile.roll bench` times it at -O2 without the sanitizers; `make -f Makefile.roll sheet` writes the contact sheets next to the
+# test/out/roll-sheet/. Self-contained: not part of Makefile.host or Makefile.app.
+CC      ?= gcc
+CFLAGS  ?= -std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare -fsanitize=address,undefined -fno-omit-frame-pointer
+FAST    ?= -std=gnu11 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare
+GFX      = ../source/gfx
+SRC      = test_roll.c $(GFX)/paper_roll.c $(GFX)/paper.c $(GFX)/gfx.c $(GFX)/gfx_image.c $(GFX)/fontdata.c
+DEPS     = $(SRC) $(GFX)/paper_roll.h $(GFX)/paper.h $(GFX)/gfx.h
+SHEETDIR = out/roll-sheet
+
+test: test_roll
+	ASAN_OPTIONS=detect_leaks=0 ./test_roll
+
+bench: test_roll_fast
+	./test_roll_fast --bench
+
+sheet: test_roll_fast
+	./test_roll_fast --sheet $(SHEETDIR) $(SHEETDIR)
+
+test_roll: $(DEPS)
+	$(CC) $(CFLAGS) -Wno-unused-function -I$(GFX) -o $@ $(SRC) -lm
+
+test_roll_fast: $(DEPS)
+	$(CC) $(FAST) -Wno-unused-function -I$(GFX) -o $@ $(SRC) -lm
+
+clean:
+	rm -f test_roll test_roll_fast
