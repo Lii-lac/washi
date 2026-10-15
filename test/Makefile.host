@@ -1,0 +1,48 @@
+# Host tests: no libnx, no Switch. Needs gcc and make (on Windows: WSL, or `docker run --rm -v "%CD%":/src -w /src/test gcc make -f Makefile.host`).
+CC      ?= gcc
+CFLAGS  ?= -std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -Wno-sign-compare -fsanitize=address,undefined -fno-omit-frame-pointer
+SRC      = ../source/hash.c ../source/fsx.c ../source/store.c ../source/custom_pics.c ../source/locker.c ../source/cJSON.c ../source/nacp_name.c ../source/sysprofile.c ../source/gfx/gfx_image.c ../source/gfx/tint.c backend_host.c test_locker.c
+
+test: test_locker test_reminder test_motion test_dirty test_paper test_trial test_avatar_src test_icons
+	ASAN_OPTIONS=detect_leaks=0 ./test_locker
+	ASAN_OPTIONS=detect_leaks=0 ./test_reminder
+	ASAN_OPTIONS=detect_leaks=0 ./test_motion
+	ASAN_OPTIONS=detect_leaks=0 ./test_dirty
+	ASAN_OPTIONS=detect_leaks=0 ./test_paper
+	ASAN_OPTIONS=detect_leaks=0 ./test_trial
+	ASAN_OPTIONS=detect_leaks=0 ./test_avatar_src
+	ASAN_OPTIONS=detect_leaks=0 ./test_icons
+
+# the in-game sign-out reminder's logic (sysmodule/)
+test_reminder: test_reminder.c ../sysmodule/source/reminder.c ../sysmodule/source/reminder.h ../source/cJSON.c
+	$(CC) $(CFLAGS) -I../source -o $@ test_reminder.c ../sysmodule/source/reminder.c ../source/cJSON.c -lm
+
+# how the interface's moving parts move: springs, throws, ends that give (source/ui_motion.c)
+test_motion: test_motion.c ../source/ui_motion.c ../source/ui_motion.h
+	$(CC) $(CFLAGS) -I../source -o $@ test_motion.c ../source/ui_motion.c -lm
+
+# dirty rectangles and the framebuffer history, with a long random walk (source/dirty.c)
+test_dirty: test_dirty.c ../source/dirty.c ../source/dirty.h
+	$(CC) $(CFLAGS) -I../source -o $@ test_dirty.c ../source/dirty.c
+
+# an update's trial and going back to the version kept from before (source/trial.c)
+test_trial: test_trial.c ../source/trial.c ../source/trial.h
+	$(CC) $(CFLAGS) -I../source -o $@ test_trial.c ../source/trial.c
+
+# the console's own profile pictures: the Yaz0 unpacker (on bad data too) and the folder reader (source/gfx/avatar_src.c)
+test_avatar_src: test_avatar_src.c avatar_fixture.h ../source/gfx/avatar_src.c ../source/gfx/avatar_src.h
+	$(CC) $(CFLAGS) -I../source/gfx -o $@ test_avatar_src.c ../source/gfx/avatar_src.c
+
+# the Online icons: their keys, the folder scan, the repository's listing and the addresses (source/custom_pics.c, source/icons.c)
+test_icons: test_icons.c ../source/custom_pics.c ../source/custom_pics.h ../source/icons.c ../source/icons.h ../source/fsx.c ../source/hash.c ../source/cJSON.c
+	$(CC) $(CFLAGS) -I../source -o $@ test_icons.c ../source/custom_pics.c ../source/icons.c ../source/fsx.c ../source/hash.c ../source/cJSON.c -lm
+
+test_locker: $(SRC) $(wildcard ../source/*.h) backend_host.h
+	$(CC) $(CFLAGS) -I../source -I../source/gfx -o $@ $(SRC) -lm
+
+# Washi's drawing library: lift maths, seeded baking, sizes, contrast (source/gfx/paper.c); ./test_paper --sheets writes contact sheets to out/paper/
+test_paper: test_paper.c ../source/gfx/paper.c ../source/gfx/paper.h ../source/gfx/crayon.c ../source/gfx/crayon.h ../source/gfx/gfx.c ../source/gfx/gfx.h ../source/gfx/fontdata.c
+	$(CC) $(CFLAGS) -Wno-unused-function -I../source/gfx -o $@ test_paper.c ../source/gfx/paper.c ../source/gfx/crayon.c ../source/gfx/gfx.c ../source/gfx/fontdata.c -lm
+
+clean:
+	rm -f test_locker test_reminder test_motion test_dirty test_paper test_trial test_avatar_src test_icons
