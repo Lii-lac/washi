@@ -1,0 +1,45 @@
+# build output
+build/
+*.elf
+*.nacp
+*.nro
+*.nsp
+*.nso
+*.npdm
+*.map
+
+# generated on the PC (screenshots, test and tool binaries)
+test/out/
+test/app_host
+test/test_locker
+test/test_reminder
+test/test_roll
+test/test_roll_fast
+test/test_motion
+test/test_paper
+test/test_trial
+test/test_dirty
+test/test_avatar_src
+test/test_icons
+test/app_bench
+test/clip/
+gfx/out/
+gfx/tools/out/
+tools/pins/out/
+tools/out/
+render_host
+__pycache__/
+
+# the Switch's profile pictures are Nintendo's artwork: you make this file yourself (docs/profile-pictures.md)
+/data/avatars.bin
+
+# the built Home-menu forwarder (docs/forwarder.md says how to make it)
+/forwarder/*.nsp
+
+# your own console captures and local notes
+/2026*.jpg
+/*.mp4
+/finished/
+/sd-backup/
+/ref/
+/docs/readme/.roll/
