@@ -838,6 +838,23 @@ static void hub_leave(HostPlat *h, HubPos *p)
 }
 
 // The admin area end to end.
+static Store *g_admin_st;
+static char g_admin_alex[ID_MAX];
+
+static void hd_readonly_on(HostPlat *h)
+{
+    (void)h;
+    Profile pp;
+    CHECK(store_profile_load(g_admin_st, g_admin_alex, &pp) == 0 && pp.readonly == 1);
+}
+
+static void hd_readonly_name_kept(HostPlat *h)
+{
+    (void)h;
+    Profile pp;
+    CHECK(store_profile_load(g_admin_st, g_admin_alex, &pp) == 0 && pp.readonly == 1 && !strcmp(pp.name, "Alexander"));
+}
+
 static void sc_admin(void)
 {
     W w;
@@ -904,6 +921,20 @@ static void sc_admin(void)
     hp_btn(h, BTN_A);
     hp_snap(h, "rolled-back");
     hp_btn(h, BTN_A);
+    hp_btn(h, BTN_DOWN); // Read-only: asks first
+    hp_btn(h, BTN_A);
+    hp_snap(h, "readonly-confirm");
+    hp_btn(h, BTN_A);
+    hp_snap(h, "readonly-on");
+    g_admin_st = &st;
+    snprintf(g_admin_alex, sizeof g_admin_alex, "%s", alexid);
+    hp_call(h, hd_readonly_on); // (the script runs later, when the app is idle: so the check is a step in it)
+    hp_btn_n(h, BTN_UP, 7);     // up to Rename: refused while read-only
+    hp_btn(h, BTN_A);
+    hp_snap(h, "readonly-locked");
+    hp_btn(h, BTN_A);
+    hp_call(h, hd_readonly_name_kept);
+    hp_btn_n(h, BTN_DOWN, 7);   // back to Read-only
     hp_btn(h, BTN_DOWN); // Delete profile
     hp_btn(h, BTN_A);
     hp_snap(h, "delete-confirm");
@@ -3103,7 +3134,7 @@ static void sc_deleted(void)
     hub_open(h, &hub, HUB_PROFILES);
     hp_btn(h, BTN_DOWN); // Jordan
     hp_btn(h, BTN_A);
-    hp_btn_n(h, BTN_DOWN, 5); // Delete profile
+    hp_btn_n(h, BTN_DOWN, 6); // Delete profile (Read-only comes before it)
     hp_btn(h, BTN_A);
     hp_snap(h, "delete-confirm");
     hp_btn(h, BTN_A); // Delete

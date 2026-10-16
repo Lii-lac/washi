@@ -330,6 +330,7 @@ int store_save_state(Store *st)
     cJSON_AddNumberToObject(j, "intro_done", st->state.intro_done);
     cJSON_AddNumberToObject(j, "loaded_at", (double)st->state.loaded_at);
     cJSON_AddNumberToObject(j, "wiped", st->state.wiped);
+    if (st->state.discard) cJSON_AddNumberToObject(j, "discard", 1);
     return write_json(st, path, j, 1);
 }
 
@@ -403,6 +404,7 @@ static void load_state(Store *st)
     st->state.intro_done = jnum(j, "intro_done", 0) != 0;
     st->state.loaded_at = (int64_t)jnum(j, "loaded_at", 0);
     st->state.wiped = jnum(j, "wiped", 0) != 0;
+    st->state.discard = jnum(j, "discard", 0) != 0;
     cJSON_Delete(j);
 }
 
@@ -641,6 +643,7 @@ static int save_profile_file(Store *st, const char *dir, const Profile *p)
     if (p->picfile[0]) cJSON_AddStringToObject(j, "picfile", p->picfile);
     cJSON_AddStringToObject(j, "netid", p->netid);
     if (p->pinned) cJSON_AddNumberToObject(j, "pinned", (double)p->pinned);
+    if (p->readonly) cJSON_AddNumberToObject(j, "readonly", 1);
     return write_json(st, path, j, 0);
 }
 
@@ -688,6 +691,10 @@ static int load_profile_file(const char *path, const char *id, Profile *out)
     store_netid_clean(jstr(j, "netid", ""), out->netid);
     out->pinned = (int64_t)jnum(j, "pinned", 0);
     if (out->pinned < 0) out->pinned = 0;
+    {
+        const cJSON *ro = cJSON_GetObjectItemCaseSensitive(j, "readonly"); // (a hand-edited true works too)
+        out->readonly = cJSON_IsTrue(ro) || (cJSON_IsNumber(ro) && ro->valuedouble != 0);
+    }
     cJSON_Delete(j);
     return 0;
 }

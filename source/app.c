@@ -248,7 +248,7 @@ static void sys_profile_sync_warn(void)
 
 // ------------------------------------------------------------------------------------------------ progress, recovery
 
-typedef enum { OP_SWAP, OP_LOAD, OP_SIGNOUT, OP_RECOVER, OP_ROLLBACK, OP_CLAIM, OP_GIVE, OP_SNAPSHOT, OP_RESTORE } OpKind;
+typedef enum { OP_SWAP, OP_LOAD, OP_SIGNOUT, OP_CLEAR, OP_RECOVER, OP_ROLLBACK, OP_CLAIM, OP_GIVE, OP_SNAPSHOT, OP_RESTORE } OpKind;
 
 static struct {
     OpKind kind;
@@ -308,6 +308,10 @@ static void progress_open(OpKind kind, const char *from, const char *to)
         g_op.nsteps = 3;
         snprintf(title, sizeof title, "Backing up %s\xE2\x80\x99s saves", from);
         ui_progress_begin(title, sign, 3);
+    } else if (kind == OP_CLEAR) { // a read-only profile is left: nothing is backed up, the console is only cleared
+        const char *clr[2] = {"Checked", "Clearing the console"};
+        g_op.nsteps = 2;
+        ui_progress_begin("Clearing the console", clr, 2);
     } else if (kind == OP_RECOVER) {
         g_op.nsteps = 2;
         ui_progress_begin("Finishing the swap", two, 2);
@@ -386,7 +390,8 @@ static int do_swap(const Profile *p)
     char from[48];
     profile_name_of(g_st.state.holder, from, sizeof from);
     int guest = !strcmp(g_st.state.holder, UNCLAIMED) && g_st.state.wiped;
-    progress_open(guest ? OP_LOAD : OP_SWAP, from, p->name);
+    int leaving_ro = !guest && lk_profile_readonly(g_lk, g_st.state.holder) == 1; // (nothing of theirs is backed up)
+    progress_open(guest || leaving_ro ? OP_LOAD : OP_SWAP, from, p->name);
     int rc = lk_swap_to(g_lk, p->id);
     ui_progress_end();
     if (rc == LK_NOOP) return 1;
@@ -399,6 +404,7 @@ static int do_swap(const Profile *p)
     snprintf(head, sizeof head, "You\xE2\x80\x99re playing as %s", p->name);
     detail[0] = 0;
     strncat(detail, "Your saves are loaded.\n", sizeof detail - 1);
+    if (p->readonly) strncat(detail, "Read-only: what you play isn\xE2\x80\x99t kept.\n", sizeof detail - strlen(detail) - 1);
     for (int i = 0; i < g_lk->nwarn; i++) {
         strncat(detail, g_lk->warn[i], sizeof detail - strlen(detail) - 1);
         strncat(detail, "\n", sizeof detail - strlen(detail) - 1);
@@ -437,7 +443,7 @@ static int do_claim(const Profile *p)
 
 static void auto_backup(const char *who);
 
-static int do_sign_out(void)
+static int do_sign_out_ask(int ask)
 {
     if (lk_needs_recovery(g_lk)) {
         recovery_flow(0);
@@ -445,7 +451,13 @@ static int do_sign_out(void)
     }
     char who[48];
     profile_name_of(g_st.state.holder, who, sizeof who);
-    progress_open(OP_SIGNOUT, who, "");
+    int ro = lk_profile_readonly(g_lk, g_st.state.holder) == 1;
+    if (ro && ask) { // what was played is thrown away: ask first
+        char head[120];
+        snprintf(head, sizeof head, "Sign out of %s?", who);
+        if (!ui_confirm(head, "It\xE2\x80\x99s read-only, so what was played isn\xE2\x80\x99t kept.", "Sign out", "Cancel", 0, NULL, 0)) return 0;
+    }
+    progress_open(ro ? OP_CLEAR : OP_SIGNOUT, who, "");
     int rc = lk_sign_out(g_lk);
     ui_progress_end();
     if (rc == LK_NOOP) return 1;
@@ -454,9 +466,11 @@ static int do_sign_out(void)
         return 0;
     }
     sys_profile_sync_warn(); // nobody is loaded now: the console\xE2\x80\x99s own profile goes back to how it was
-    auto_backup(who);
+    if (!ro) auto_backup(who); // (a read-only profile kept nothing: there is nothing new to back up)
     return 1;
 }
+
+static int do_sign_out(void) { return do_sign_out_ask(1); }
 
 // ------------------------------------------------------------------------------------------------ the roster
 
@@ -776,9 +790,18 @@ static void set_picture(Profile *p, int pic)
     snprintf(p->picfile, sizeof p->picfile, "%s", key ? key : "");
 }
 
+// A read-only profile's own details (name, picture, NetID, password) are as fixed as its saves. 1 (after saying so) if it is read-only.
+static int ro_locked(const Profile *p)
+{
+    if (!p->readonly) return 0;
+    ui_message(UI_WARN, "It\xE2\x80\x99s read-only", "Turn read-only off in Admin first to change this.");
+    return 1;
+}
+
 // Pick a picture and a background colour for a profile (like the Switch\xE2\x80\x99s own profile picture editor).
 static void picture_flow(Profile *p)
 {
+    if (ro_locked(p)) return;
     int pic = p->picture, sw = p->color;
     if (!ui_picture_picker(p->name, &pic, &sw)) return;
     if (pic == p->picture && sw == p->color) return;
@@ -912,9 +935,13 @@ static void choose_profile(const Profile *p)
         snprintf(detail, sizeof detail,
                  "%d game%s  " DOT "  %s%s\n\nWhat\xE2\x80\x99s on the console is backed up first.", games,
                  games == 1 ? "" : "s", last > 0 ? "last played " : "", ago);
+    else if (lk_profile_readonly(g_lk, g_st.state.holder) == 1)
+        snprintf(detail, sizeof detail, "%d game%s  " DOT "  %s%s\n\nWhat was played as %s isn\xE2\x80\x99t kept (read-only).",
+                 games, games == 1 ? "" : "s", last > 0 ? "last played " : "", ago, holder);
     else
         snprintf(detail, sizeof detail, "%d game%s  " DOT "  %s%s\n\n%s\xE2\x80\x99s saves are backed up first.",
                  games, games == 1 ? "" : "s", last > 0 ? "last played " : "", ago, holder);
+    if (p->readonly) strncat(detail, "\n\nThis one is read-only: what you play isn\xE2\x80\x99t kept.", sizeof detail - strlen(detail) - 1);
     if (!ui_confirm(headline, detail, "Switch", "Cancel", 0, p->name, look_of(p))) return;
     do_swap(p);
 }
@@ -1340,6 +1367,8 @@ static void edit_profile_flow(const char *id)
         items[E_PICTURE].label = "Picture and background"; items[E_PICTURE].swatch = p.color % SKIN_COLORS; items[E_PICTURE].chevron = 1; items[E_PICTURE].toggle = -1;
         items[E_NAME].label = "Name"; items[E_NAME].detail = p.name; items[E_NAME].chevron = 1; items[E_NAME].toggle = -1;
         items[E_NETID].label = "NetID"; items[E_NETID].detail = p.netid[0] ? "set" : "not set"; items[E_NETID].chevron = 1; items[E_NETID].toggle = -1;
+        if (p.readonly)
+            for (int i = 0; i < 3; i++) items[i].style = ITEM_DIM; // (read-only: shown, not editable)
         UiList l;
         memset(&l, 0, sizeof l);
         l.title = "Edit profile";
@@ -1353,6 +1382,7 @@ static void edit_profile_flow(const char *id)
         int r = ui_list(&l, NULL);
         sel = l.sel;
         if (r < 0 || quitting()) return;
+        if (ro_locked(&p)) continue;
         if (r == E_PICTURE) {
             picture_flow(&p);
         } else if (r == E_NAME) {
@@ -1398,14 +1428,14 @@ static int admin_profile(const char *id)
         snprintf(hd.name, sizeof hd.name, "%s", p.name);
         hd.color = look_of(&p);
         hd.loaded = !strcmp(g_st.state.holder, p.id);
-        snprintf(hd.sub, sizeof hd.sub, "%d game%s  " DOT "  %s%s", games, games == 1 ? "" : "s",
-                 store_profile_has_pin(&p) ? "password set" : "no password", hd.loaded ? "  " DOT "  loaded now" : "");
+        snprintf(hd.sub, sizeof hd.sub, "%d game%s  " DOT "  %s%s%s", games, games == 1 ? "" : "s",
+                 store_profile_has_pin(&p) ? "password set" : "no password", p.readonly ? "  " DOT "  read-only" : "", hd.loaded ? "  " DOT "  loaded now" : "");
 
-        UiItem items[8];
-        int map[8], n = 0;
+        UiItem items[10];
+        int map[10], n = 0;
         memset(items, 0, sizeof items);
         items_init(items, (int)(sizeof items / sizeof items[0]));
-        enum { A_RENAME, A_NETID, A_REMOVE_NETID, A_PASSWORD, A_REMOVE_PW, A_PICTURE, A_ROLLBACK, A_DELETE };
+        enum { A_RENAME, A_NETID, A_REMOVE_NETID, A_PASSWORD, A_REMOVE_PW, A_PICTURE, A_ROLLBACK, A_READONLY, A_DELETE };
         items[n].label = "Rename"; items[n].chevron = 1; items[n].toggle = -1; map[n++] = A_RENAME;
         items[n].label = "NetID"; items[n].detail = p.netid[0] ? p.netid : "none"; items[n].chevron = 1; items[n].toggle = -1; map[n++] = A_NETID;
         if (p.netid[0]) { items[n].label = "Remove NetID"; items[n].toggle = -1; map[n++] = A_REMOVE_NETID; }
@@ -1413,7 +1443,11 @@ static int admin_profile(const char *id)
         if (store_profile_has_pin(&p)) { items[n].label = "Remove password"; items[n].toggle = -1; map[n++] = A_REMOVE_PW; }
         items[n].label = "Picture and background"; items[n].detail = p.picture >= 0 ? "Picture" : "First letter"; items[n].swatch = p.color % SKIN_COLORS; items[n].chevron = 1; map[n++] = A_PICTURE;
         items[n].label = "Roll back to earlier saves"; items[n].chevron = 1; items[n].toggle = -1; map[n++] = A_ROLLBACK;
+        items[n].label = "Read-only"; items[n].detail = "play isn\xE2\x80\x99t kept"; items[n].toggle = p.readonly; map[n++] = A_READONLY;
         items[n].label = "Delete profile"; items[n].style = ITEM_DANGER; items[n].toggle = -1; map[n++] = A_DELETE;
+        if (p.readonly)
+            for (int i = 0; i < n; i++)
+                if (map[i] <= A_PICTURE) items[i].style = ITEM_DIM; // (read-only: shown, not editable)
 
         UiList l;
         memset(&l, 0, sizeof l);
@@ -1428,6 +1462,7 @@ static int admin_profile(const char *id)
         int r = ui_list(&l, NULL);
         sel = l.sel;
         if (r < 0 || quitting()) return changed;
+        if (map[r] <= A_PICTURE && ro_locked(&p)) continue; // rename, NetID, password and picture are all before A_ROLLBACK in the enum
         switch (map[r]) {
         case A_RENAME: {
             char nm[NAME_MAX_BYTES];
@@ -1478,8 +1513,30 @@ static int admin_profile(const char *id)
             picture_flow(&p);
             changed |= PROFILE_LOOK;
             break;
+        case A_READONLY:
+            if (!strcmp(g_st.state.holder, p.id)) {
+                ui_message(UI_WARN, "Their saves are loaded", "Sign out first.");
+            } else if (g_st.state.phase != PH_IDLE || lk_needs_recovery(g_lk)) {
+                ui_message(UI_WARN, "Finish the last swap first", "Washi will offer to finish it.");
+            } else if (!p.readonly) {
+                char head[120];
+                snprintf(head, sizeof head, "Make %s read-only?", p.name);
+                if (ui_confirm(head, "What anyone plays as them is thrown away when they sign out or someone else loads. Their saves stay as they are now.",
+                               "Make read-only", "Cancel", 0, p.name, look_of(&p))) {
+                    p.readonly = 1;
+                    store_profile_save(&g_st, &p);
+                    changed |= PROFILE_LOOK;
+                }
+            } else {
+                p.readonly = 0;
+                store_profile_save(&g_st, &p);
+                changed |= PROFILE_LOOK;
+            }
+            break;
         case A_ROLLBACK:
-            if (!strcmp(g_st.state.holder, p.id))
+            if (p.readonly)
+                ui_message(UI_WARN, "It\xE2\x80\x99s read-only", "Turn read-only off first.");
+            else if (!strcmp(g_st.state.holder, p.id))
                 ui_message(UI_WARN, "Their saves are loaded", "Sign out first.");
             else {
                 admin_rollback(&p);
@@ -2175,6 +2232,10 @@ static void admin_unclaimed(void)
         if (a == 0) {
             Profile p;
             if (!pick_profile("Give to", pick_sub, &p)) continue;
+            if (p.readonly) {
+                ui_message(UI_WARN, "It\xE2\x80\x99s read-only", "Turn read-only off on its profile page first.");
+                continue;
+            }
             char head[120];
             snprintf(head, sizeof head, "Give these saves to %s?", p.name);
             if (!ui_confirm(head, "Their current saves go to Roll back. Their games that aren\xE2\x80\x99t in these stay as they are.",
@@ -2493,11 +2554,11 @@ static int ask_still_there(UiHome *h)
     snprintf(head, sizeof head, "Is this still %s?", who);
     ui_format_minutes(minutes >= 60 ? (int)(minutes / 15 * 15) : (int)minutes, dur, sizeof dur); // to the quarter hour
     snprintf(detail, sizeof detail, "%s's saves have been loaded for %s.", who, dur);
-    UiChoice items[2] = {{"Yes, still me", NULL, 0}, {"Sign out", "Backs up and clears the console.", 0}};
+    UiChoice items[2] = {{"Yes, still me", NULL, 0}, {"Sign out", lk_profile_readonly(g_lk, g_st.state.holder) == 1 ? "Clears the console. Nothing is kept." : "Backs up and clears the console.", 0}};
     ui_home_backdrop(h);
     int c = ui_choice(head, detail, items, 2, 0);
     if (c == 1) {
-        do_sign_out();
+        do_sign_out_ask(0); // (they just chose it)
         return 1;
     }
     if (c == 0) {
@@ -2644,7 +2705,8 @@ static void home_loop(void)
             } else {
                 char who[48];
                 profile_name_of(g_st.state.holder, who, sizeof who);
-                if (do_sign_out()) snprintf(h.toast, sizeof h.toast, "%s\xE2\x80\x99s saves are backed up.", who);
+                int was_ro = lk_profile_readonly(g_lk, g_st.state.holder) == 1;
+                if (do_sign_out()) snprintf(h.toast, sizeof h.toast, was_ro ? "%s is read-only: nothing was kept." : "%s\xE2\x80\x99s saves are backed up.", who);
                 if (r.list && (size_t)h.sel < r.n) snprintf(keep, sizeof keep, "%s", r.list[h.sel].id);
                 reload = 1;
             }

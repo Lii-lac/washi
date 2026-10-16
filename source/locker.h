@@ -22,6 +22,7 @@ typedef enum {
     LK_ERR_VERIFY,
     LK_ERR_BACKEND,
     LK_ERR_IS_HOLDER,      // can't rename/roll back/delete/retarget while this profile's saves are loaded
+    LK_ERR_READONLY,       // the profile is read-only: nothing may be written into it
 } LkStatus;
 
 typedef struct {
@@ -44,6 +45,8 @@ typedef struct Locker {
     int swap_titles;                     // games backed up in the last operation
     uint64_t swap_bytes;
     int unclaimed_saved;                 // the last backup landed in unclaimed/ (someone played without the app)
+    int writing;                         // a file in the save is open for writing: the console refuses to commit then (commit_now() models that)
+    int discard;                         // this operation leaves a read-only holder: no backup, and the console is cleared without comparing (kept in state.json)
 
     // internals
     uint8_t *buf;
@@ -83,6 +86,9 @@ int lk_claim_guest(Locker *lk, const char *profile_id);
 int lk_played_titles(Locker *lk);                // how many games have anything in their save on the console right now
 int lk_rollback(Locker *lk, const char *profile_id, const char *history_name);
 int lk_delete_profile(Locker *lk, const char *profile_id);
+// 1 if the profile is read-only (what is played as it is thrown away when it is left; claim, roll back and give are refused), 0 if not, -1 if its
+// file exists but can't be read (the caller must not guess)
+int lk_profile_readonly(Locker *lk, const char *profile_id);
 int lk_set_target(Locker *lk, const char *uid_hex);
 
 int lk_profile_summary(Locker *lk, const char *profile_id, int *ngames, int64_t *last_used);

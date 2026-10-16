@@ -49,6 +49,7 @@ typedef struct {
     char unclaimed_base[ID_MAX];         // after a sign-out: the profile whose backup equals what is on the account
     int intro_done;                      // "back up with JKSV first" shown
     int64_t loaded_at;                   // when the holder's saves were loaded (0 = unknown / nobody)
+    int discard;                         // journal: the holder being left is read-only, so nothing is backed up and the console is cleared without comparing
     int wiped;                           // nobody is loaded AND the console's saves were cleared by a sign-out: a guest session
 } State;
 
@@ -66,6 +67,7 @@ typedef struct {
                                          // from CUSTOM_PIC_BASE up (custom_pics.h), which stands for picfile only while the app runs
     char picfile[CUSTOM_KEY_MAX];        // "" or the Online icon's key, "<game>/<name>": what the profile file keeps instead of that number
     char netid[12];                      // "" or a NetID like abc1234 (lower case): never shown, only used to find the profile
+    int readonly;                        // 1 = what is played while it is loaded is never kept in it (a "100% saves" profile)
     int64_t pinned;                      // 0, or when an admin pinned it: pinned profiles come first in every order (the first pinned first), not in a search
 } Profile;
 

@@ -1,6 +1,6 @@
 # Reference
 
-Every screen, button, setting and limit in Washi, for looking things up. It describes version 1.0.0. For why things work
+Every screen, button, setting and limit in Washi, for looking things up. It describes version 1.1.0. For why things work
 the way they do, see [How it works](how-it-works.md).
 
 - [Words used here](#words-used-here)
@@ -227,7 +227,17 @@ A list of every profile (the loaded one is marked **Loaded**). `A` opens a profi
 | **Remove password** | Asks first. |
 | **Picture and background** | Opens [Edit Icon](#edit-profile-and-edit-icon). |
 | **Roll back to earlier saves** | Pick an earlier set (newest first). Their current saves are kept in the list too. It loads the next time they pick their name. Not while they are loaded. |
+| **Read-only** | A switch. A read-only profile keeps its saves exactly as they are: what anyone plays as it is thrown away when they sign out or someone else loads, instead of being backed up into it. Asks first; not while the profile is loaded or a swap is unfinished. See [Read-only profiles](#read-only-profiles). |
 | **Delete profile** | Moves the profile, saves and all, to [Deleted profiles](#deleted-profiles). Not while they are loaded. |
+
+### Read-only profiles
+
+For a profile of finished saves that must not be overwritten (say, a "100% saves" profile for a quick game). Loading it works as usual
+and says that play is not kept. Leaving it (switching to someone else, or signing out) clears the console without backing up first.
+That also clears any other game played during the session. Nothing can write into a read-only profile: keeping guest play,
+**Roll back**, and giving it unclaimed saves are all refused, and **Delete older backups now** skips it. Its name, picture and
+background, NetID and password are fixed too (the rows are dimmed and say so, on the admin page and on Edit profile). Pinning and
+delete still work. Turn the switch off to change any of it again.
 
 ### Deleted profiles
 

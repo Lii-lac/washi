@@ -109,7 +109,7 @@ Leave both switches off until the first check passes. Best tried on the offline 
 - [ ] **+** with nobody loaded edits the profile that is selected on Home: with a password it asks for it first (a wrong one stays on Home, B cancels), and when you leave the editor nobody is loaded (the banner still says Guest).
 - [ ] Admin → This app → **Activity log**: this start's log opens at once when it is the only one. After a few starts it lists them newest first, by the console's own time ("Today, 2:14 PM"), and A opens one. A log file older than 14 days is gone after the next start.
 - [ ] Open the app with someone loaded for 3+ hours (set the console clock forward, or load and wait): it asks "Is this still ...?"; "Yes" is not asked again for another 3 hours, "Sign out" signs them out.
-- [ ] About and the admin hub show the version (1.0.0) and hbmenu shows the same version.
+- [ ] About and the admin hub show the version (1.1.0) and hbmenu shows the same version.
 - [ ] **Menus wrap**: a single press of Up at the top of a menu or list goes round to the bottom, and Down at the bottom goes round to the top (admin hub sections and rows, lists, Storage, Backups, choice boxes, Edit Icon rows). Holding the D-pad stops at the end instead (with the little bump), it does not spin round. Keypads, the keyboard and the order sleeve do not wrap (the sleeve's sticker gives a little push at its ends); the picture and colour grids do (1c-2).
 - [ ] The home screen: a **search bar** sits between the loaded profile and the grid (tap it, or press Y); the footer reads only - About, + Edit profile (X is shown on the Sign out button, Y on the search bar, R3 on the chip); with a search, - Clear search comes first (About is then the logo's tap), and the bar's end shows the - button instead of Y. B does nothing on Home.
 - [ ] While nobody is loaded the banner shows **Guest** with Miku's picture, "Miku" and "nothing played right now is saved".
@@ -437,6 +437,16 @@ Nothing in this section has been run on the console yet. Do it in Paper and once
 - [ ] Shared games also lists the **device saves** (games with one save for the whole console) as "always shared"; they can't be swapped per person.
 - [ ] The admin page only opens with the chord ZL + L + D-pad up + Plus (Minus opens About, Plus edits the loaded profile; pressing Plus while ZL is held must not open the editor).
 - [ ] Rename / **NetID** (admin only): set one (abc1234, any case); a wrong one is refused; Remove NetID clears it. Home → Y search finds that profile by its NetID, and the NetID is never shown anywhere else.
+
+## 10b9. Read-only profiles
+
+- [ ] Admin -> Profiles -> a profile -> **Read-only** asks first, then the switch is on and the page says "read-only". It is refused while that profile is loaded.
+- [ ] Load a read-only profile: the message says play isn't kept. Play a game, change something, sign out (asks first, the toast says nothing was kept), load it again: the change is gone.
+- [ ] Switching from a read-only profile to another says what was played isn't kept; the other profile is loaded as usual.
+- [ ] Roll back and "Give to a profile" on a read-only profile say it is read-only. A new profile made by a guest can still keep guest play.
+- [ ] On a read-only profile, Rename / NetID / password / Picture and background (admin page) and Plus -> Edit profile are dimmed and say it is read-only; nothing opens.
+- [ ] Loading a profile with a big save (Odyssey, Smash, BotW) works: the save is committed in pieces with the file closed (a commit with a file open fails on the console). If it fails, the message ends with the console's error code.
+- [ ] Switch **Read-only** off: the next sign-out backs up again.
 
 ## Before you open this to the club
 

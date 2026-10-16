@@ -18,6 +18,7 @@
 
 #define BATTERY_MIN_PERCENT 15
 #define COPY_BUF (256 * 1024)
+#define FILE_COST 0x4000 // what a file written into a save takes of its journal besides its bytes: the last partly used block and its entries (an estimate on the safe side)
 
 // ---------------------------------------------------------------------------------------------------- plumbing
 
@@ -48,6 +49,7 @@ static void reset(Locker *lk)
     lk->swap_titles = 0;
     lk->swap_bytes = 0;
     lk->unclaimed_saved = 0;
+    lk->discard = 0;
     lk->uncommitted = 0;
     lk->cur = lk->total = 0;
     lk->label[0] = 0;
@@ -208,6 +210,8 @@ static void man_add(LkManifest *m, const char *path, uint64_t size, uint32_t crc
     m->n++;
 }
 
+static int snapshot_check(const LkManifest *m, const char *tmp); // (defined with the snapshots)
+
 static void man_free(LkManifest *m)
 {
     for (size_t i = 0; i < m->n; i++) free(m->v[i].path);
@@ -215,15 +219,35 @@ static void man_free(LkManifest *m)
     memset(m, 0, sizeof *m);
 }
 
+// The console refuses to commit a save while a file in it is open for writing, so a commit is only made with every file closed (the PC
+// test backend would otherwise let a mid-file commit through, which is how this went wrong on a real console).
+static int commit_now(Locker *lk) { return lk->writing ? BE_ERR : lk->be->commit(lk->be); }
+
 static int copy_file(Locker *lk, const char *src, const char *dst, int to_save)
 {
     FILE *in = fopen(src, "rb");
     if (!in) return fail(lk, LK_ERR_IO, "Couldn't read %s.", src);
+    long src_size = -1; // (what the file holds, to notice a read that stops short without an error)
+    if (lk->man && fseek(in, 0, SEEK_END) == 0) {
+        src_size = ftell(in);
+        rewind(in);
+    }
+    // Commit between files, not after every one: a commit costs tens of milliseconds on the console, and a game with hundreds of small files
+    // (Breath of the Wild has 400) took minutes. A file takes its bytes and FILE_COST of the journal; commit when the next would not fit.
+    if (to_save && lk->journal_limit && lk->uncommitted && lk->uncommitted + FILE_COST > lk->journal_limit) {
+        if (commit_now(lk) != BE_OK) {
+            fclose(in);
+            return fail(lk, LK_ERR_BACKEND, "Couldn't commit the save before %s (error %08X).", dst, (unsigned)lk->be->last_rc);
+        }
+        lk->uncommitted = 0;
+    }
     FILE *out = fopen(dst, "wb");
     if (!out) {
         fclose(in);
         return fail(lk, to_save ? LK_ERR_BACKEND : LK_ERR_IO, "Couldn't create %s.", dst);
     }
+    lk->writing = to_save;
+    if (to_save) lk->uncommitted += FILE_COST;
     size_t chunk = lk->bufsz;
     if (to_save && lk->journal_limit && chunk > lk->journal_limit / 2) {
         chunk = lk->journal_limit / 2;
@@ -245,8 +269,18 @@ static int copy_file(Locker *lk, const char *src, const char *dst, int to_save)
         if (to_save) {
             // A save can only take so many uncommitted bytes: commit before we'd go over (JKSV does the same).
             if (lk->uncommitted + n > lk->journal_limit) {
-                if (fflush(out) != 0 || lk->be->commit(lk->be) != BE_OK) {
-                    rc = fail(lk, LK_ERR_BACKEND, "Couldn't commit the save while writing %s.", dst);
+                // close the file, commit, and go on at its end (JKSV does the same: a commit with the file still open fails)
+                int ok = fflush(out) == 0 && fclose(out) == 0;
+                out = NULL;
+                lk->writing = 0;
+                if (ok) ok = commit_now(lk) == BE_OK;
+                if (ok) {
+                    out = fopen(dst, "ab");
+                    ok = out != NULL;
+                    lk->writing = ok;
+                }
+                if (!ok) {
+                    rc = fail(lk, LK_ERR_BACKEND, "Couldn't commit the save while writing %s (error %08X).", dst, (unsigned)lk->be->last_rc);
                     break;
                 }
                 lk->uncommitted = 0;
@@ -263,14 +297,14 @@ static int copy_file(Locker *lk, const char *src, const char *dst, int to_save)
         lk->cur += n;
         report(lk);
     }
-    if (fflush(out) != 0 && rc == LK_OK) rc = fail(lk, LK_ERR_IO, "Couldn't write %s.", dst);
-    if (fclose(out) != 0 && rc == LK_OK) rc = fail(lk, LK_ERR_IO, "Couldn't write %s.", dst);
-    fclose(in);
-    if (rc == LK_OK && lk->man) man_add(lk->man, dst, got, crc);
-    if (rc == LK_OK && to_save) {
-        if (lk->be->commit(lk->be) != BE_OK) return fail(lk, LK_ERR_BACKEND, "Couldn't commit %s.", dst);
-        lk->uncommitted = 0;
+    if (out) {
+        if (fflush(out) != 0 && rc == LK_OK) rc = fail(lk, LK_ERR_IO, "Couldn't write %s.", dst);
+        if (fclose(out) != 0 && rc == LK_OK) rc = fail(lk, LK_ERR_IO, "Couldn't write %s.", dst);
     }
+    lk->writing = 0;
+    fclose(in);
+    if (rc == LK_OK && lk->man && src_size >= 0 && got != (uint64_t)src_size) rc = fail(lk, LK_ERR_IO, "Couldn't read all of %s.", src);
+    if (rc == LK_OK && lk->man) man_add(lk->man, dst, got, crc);
     return rc;
 }
 
@@ -304,7 +338,7 @@ static int copy_tree(Locker *lk, const char *src, const char *dst, int to_save)
 static int wipe_tick(void *user)
 {
     Locker *lk = user;
-    if (++lk->wipe_count % 128 == 0 && lk->be->commit(lk->be) != BE_OK) return -1;
+    if (++lk->wipe_count % 128 == 0 && commit_now(lk) != BE_OK) return -1;
     return 0;
 }
 
@@ -333,6 +367,7 @@ static int journal(Locker *lk, Phase phase, const char *from, const char *to)
     snprintf(s->from, sizeof s->from, "%s", from);
     snprintf(s->to, sizeof s->to, "%s", to);
     s->started = (int64_t)lk->be->now(lk->be);
+    s->discard = lk->discard; // (decided once when the operation starts; a power cut then finishes it the same way whatever profile.json says by then)
     if (store_save_state(lk->st) != 0) return fail(lk, LK_ERR_IO, "Couldn't write the swap journal to the SD card.");
     return LK_OK;
 }
@@ -354,6 +389,7 @@ static int finish_swap(Locker *lk, const char *to)
     s->from[0] = s->to[0] = 0;
     s->unclaimed_base[0] = 0;
     s->wiped = 0;
+    s->discard = 0;
     s->loaded_at = (int64_t)lk->be->now(lk->be);
     if (store_save_state(lk->st) != 0) return fail(lk, LK_ERR_IO, "Couldn't update state.json.");
     profile_touch(lk, to);
@@ -366,6 +402,7 @@ static int finish_signout(Locker *lk, const char *from)
     (void)from;
     s->unclaimed_base[0] = 0; // the console no longer matches anyone's backup: it has been cleared
     s->wiped = 1;
+    s->discard = 0;
     snprintf(s->holder, sizeof s->holder, "%s", UNCLAIMED);
     s->phase = PH_IDLE;
     s->from[0] = s->to[0] = 0;
@@ -487,9 +524,15 @@ static int backup_title(Locker *lk, uint64_t t, const char *staging)
     lk->total = fsx_tree_size(lk->be->save_root);
     report(lk);
     int rc = fsx_mkdir_p(dst) == 0 ? LK_OK : fail(lk, LK_ERR_IO, "Couldn't create %s.", dst);
-    if (rc == LK_OK) rc = copy_tree(lk, lk->be->save_root, dst, 0);
-    if (rc == LK_OK && fsx_tree_equal(lk->be->save_root, dst) != 1)
-        rc = fail(lk, LK_ERR_VERIFY, "The backup of %s didn't match. Nothing was changed.", lbl);
+    if (rc == LK_OK) {
+        LkManifest man; // (the save is read once; the check reads only the copy: see restore_title)
+        memset(&man, 0, sizeof man);
+        lk->man = &man;
+        rc = copy_tree(lk, lk->be->save_root, dst, 0);
+        lk->man = NULL;
+        if (rc == LK_OK && !snapshot_check(&man, dst)) rc = fail(lk, LK_ERR_VERIFY, "The backup of %s didn't match. Nothing was changed.", lbl);
+        man_free(&man);
+    }
     lk->be->unmount(lk->be);
     if (rc == LK_OK) {
         lk->swap_bytes += lk->total;
@@ -695,13 +738,20 @@ static int restore_title(Locker *lk, uint64_t t, int in_sys, int in_bak, const c
     report(lk);
 
     int rc = empty_save(lk);
-    if (rc == LK_OK && lk->be->commit(lk->be) != BE_OK) rc = fail(lk, LK_ERR_BACKEND, "Couldn't commit the save for %s.", lbl);
+    if (rc == LK_OK && commit_now(lk) != BE_OK) rc = fail(lk, LK_ERR_BACKEND, "Couldn't commit the save for %s (error %08X).", lbl, (unsigned)lk->be->last_rc);
     if (rc == LK_OK && in_bak) {
+        // The backup is read once, to copy it, with a checksum of each file; the check afterwards reads only the loaded save and compares
+        // (reading the backup a second time was most of the wait after the progress bar reached the end).
+        LkManifest man;
+        memset(&man, 0, sizeof man);
+        lk->man = &man;
         rc = copy_tree(lk, src, lk->be->save_root, 1);
-        if (rc == LK_OK && lk->be->commit(lk->be) != BE_OK)
-            rc = fail(lk, LK_ERR_BACKEND, "Couldn't commit the save for %s.", lbl);
-        if (rc == LK_OK && fsx_tree_equal(src, lk->be->save_root) != 1)
+        lk->man = NULL;
+        if (rc == LK_OK && commit_now(lk) != BE_OK)
+            rc = fail(lk, LK_ERR_BACKEND, "Couldn't commit the save for %s (error %08X).", lbl, (unsigned)lk->be->last_rc);
+        if (rc == LK_OK && !snapshot_check(&man, lk->be->save_root))
             rc = fail(lk, LK_ERR_VERIFY, "The loaded save for %s didn't match its backup.", lbl);
+        man_free(&man);
     }
     lk->be->unmount(lk->be);
     if (rc == LK_OK) rc = cp(lk, "restore:title");
@@ -747,7 +797,7 @@ static int do_wipe(Locker *lk, const char *backed_up_as)
 {
     lk->phase = 3;
     char cur[FSX_PATH];
-    int check = strcmp(backed_up_as, UNCLAIMED) != 0;
+    int check = strcmp(backed_up_as, UNCLAIMED) != 0 && !lk->discard; // (a read-only holder has no backup of what was played: nothing to compare with)
     if (check) {
         char pdir[FSX_PATH];
         store_profile_dir(lk->st, backed_up_as, pdir, sizeof pdir);
@@ -775,7 +825,7 @@ static int do_wipe(Locker *lk, const char *backed_up_as)
                 lk->cur = lk->total = 0;
                 report(lk);
                 rc = empty_save(lk);
-                if (rc == LK_OK && lk->be->commit(lk->be) != BE_OK) rc = fail(lk, LK_ERR_BACKEND, "Couldn't commit the cleared save for %s.", lbl);
+                if (rc == LK_OK && commit_now(lk) != BE_OK) rc = fail(lk, LK_ERR_BACKEND, "Couldn't commit the cleared save for %s (error %08X).", lbl, (unsigned)lk->be->last_rc);
             }
         }
         lk->be->unmount(lk->be);
@@ -794,6 +844,30 @@ static void log_result(Locker *lk, const char *what, const char *from, const cha
                rc == LK_OK ? "" : ": ", rc == LK_OK ? "" : lk->err);
 }
 
+// Whether the profile `id` is read-only. A profile.json that is there but can't be read stops the operation: guessing "not read-only"
+// could back play up into a protected profile.
+static int holder_readonly(Locker *lk, const char *id, int *ro)
+{
+    *ro = 0;
+    if (!id[0] || !strcmp(id, UNCLAIMED)) return LK_OK;
+    Profile p;
+    if (store_profile_load(lk->st, id, &p) == 0) {
+        *ro = p.readonly;
+        return LK_OK;
+    }
+    char dir[FSX_PATH], path[FSX_PATH];
+    store_profile_dir(lk->st, id, dir, sizeof dir);
+    if (fsx_join(path, sizeof path, dir, "profile.json") == 0 && fsx_exists(path))
+        return fail(lk, LK_ERR_IO, "Couldn't read the loaded profile's file, so nothing was changed. Restore an earlier backup of everything (Admin, Backups) or put its profile.json back.");
+    return LK_OK; // no such profile any more: the same as before
+}
+
+int lk_profile_readonly(Locker *lk, const char *id)
+{
+    int ro = 0;
+    return holder_readonly(lk, id, &ro) == LK_OK ? ro : -1;
+}
+
 int lk_swap_to(Locker *lk, const char *target)
 {
     reset(lk);
@@ -809,10 +883,15 @@ int lk_swap_to(Locker *lk, const char *target)
     // After a sign-out the console was cleared, so anything on it now is a guest's temporary progress: it is thrown away.
     // (The first time, or after anything unexpected, the saves on the console are of unknown origin and are kept in unclaimed/.)
     int guest = !strcmp(from, UNCLAIMED) && lk->st->state.wiped;
-    int rc = preflight(lk, !guest);
-    if (rc == LK_OK && !guest) rc = journal(lk, PH_BACKING_UP, from, target);
-    if (rc == LK_OK && !guest) rc = do_backup(lk, from);
-    if (rc == LK_OK && !guest) rc = cp(lk, "swap:backed-up");
+    // A read-only holder is left like a guest: what was played is thrown away, not backed up into it.
+    int ro = 0;
+    int rc = guest ? LK_OK : holder_readonly(lk, from, &ro);
+    int no_backup = guest || ro;
+    lk->discard = ro;
+    if (rc == LK_OK) rc = preflight(lk, !no_backup);
+    if (rc == LK_OK && !no_backup) rc = journal(lk, PH_BACKING_UP, from, target);
+    if (rc == LK_OK && !no_backup) rc = do_backup(lk, from);
+    if (rc == LK_OK && !no_backup) rc = cp(lk, "swap:backed-up");
     if (rc == LK_OK) rc = journal(lk, PH_RESTORING, from, target);
     if (rc == LK_OK) rc = do_restore(lk, target);
     if (rc == LK_OK) rc = cp(lk, "swap:restored");
@@ -831,10 +910,13 @@ int lk_sign_out(Locker *lk)
     char from[ID_MAX];
     snprintf(from, sizeof from, "%s", lk->st->state.holder);
 
-    int rc = preflight(lk, 1);
-    if (rc == LK_OK) rc = journal(lk, PH_BACKING_UP, from, "");
-    if (rc == LK_OK) rc = do_backup(lk, from);
-    if (rc == LK_OK) rc = cp(lk, "signout:backed-up");
+    int ro = 0;
+    int rc = holder_readonly(lk, from, &ro); // a read-only holder: nothing is backed up, the console is only cleared
+    lk->discard = ro;
+    if (rc == LK_OK) rc = preflight(lk, !ro);
+    if (rc == LK_OK && !ro) rc = journal(lk, PH_BACKING_UP, from, "");
+    if (rc == LK_OK && !ro) rc = do_backup(lk, from);
+    if (rc == LK_OK && !ro) rc = cp(lk, "signout:backed-up");
     if (rc == LK_OK) rc = journal(lk, PH_WIPING, from, "");
     if (rc == LK_OK) rc = do_wipe(lk, from);
     if (rc == LK_OK) rc = cp(lk, "signout:wiped");
@@ -851,6 +933,7 @@ int lk_claim_guest(Locker *lk, const char *id)
     Profile p;
     if (store_profile_load(lk->st, id, &p) != 0) return fail(lk, LK_ERR_NO_PROFILE, "That profile doesn't exist.");
     if (!strcmp(lk->st->state.holder, id)) return LK_NOOP;
+    if (p.readonly) return fail(lk, LK_ERR_READONLY, "%s is read-only, so it can't keep what a guest played.", p.name);
     if (strcmp(lk->st->state.holder, UNCLAIMED) || !lk->st->state.wiped)
         return fail(lk, LK_ERR_BUSY_STATE, "Nobody is playing as a guest, so there is nothing to keep.");
 
@@ -886,6 +969,7 @@ int lk_recover(Locker *lk)
     snprintf(from, sizeof from, "%s", s->from);
     snprintf(to, sizeof to, "%s", s->to);
     Phase phase = s->phase;
+    lk->discard = s->discard; // decided when the operation began (see journal())
 
     int rc = preflight(lk, phase == PH_BACKING_UP);
     if (rc == LK_OK && phase == PH_BACKING_UP) {
@@ -936,6 +1020,7 @@ int lk_rollback(Locker *lk, const char *id, const char *hist_name)
     if (store_profile_load(lk->st, id, &p) != 0) return fail(lk, LK_ERR_NO_PROFILE, "That profile doesn't exist.");
     if (!strcmp(lk->st->state.holder, id))
         return fail(lk, LK_ERR_IS_HOLDER, "%s's saves are loaded. Sign out first.", p.name);
+    if (p.readonly) return fail(lk, LK_ERR_READONLY, "%s is read-only, so its saves can't be rolled back.", p.name);
     if (!hist_name[0] || strchr(hist_name, '/') || hist_name[0] == '.') return fail(lk, LK_ERR_IO, "Bad history entry.");
 
     TRY(heal_profile(lk, id));
@@ -1125,6 +1210,7 @@ int lk_unclaimed_give(Locker *lk, const char *leaf, const char *id)
     if (store_profile_load(lk->st, id, &p) != 0) return fail(lk, LK_ERR_NO_PROFILE, "That profile doesn't exist.");
     if (!strcmp(lk->st->state.holder, id))
         return fail(lk, LK_ERR_IS_HOLDER, "%s's saves are loaded. Sign out first.", p.name);
+    if (p.readonly) return fail(lk, LK_ERR_READONLY, "%s is read-only, so saves can't be given to it.", p.name);
     char src[FSX_PATH];
     unclaimed_tidy(lk);
     TRY(unclaimed_dir(lk, leaf, src, sizeof src));
@@ -1186,6 +1272,7 @@ int lk_history_trim(Locker *lk, int keep, int dry_run, uint64_t *bytes, int *ent
     for (size_t i = 0; i < n && rc == LK_OK; i++) {
         char dir[FSX_PATH], hist[FSX_PATH], **names;
         size_t cnt = 0;
+        if (list[i].readonly) continue; // (its earlier saves are what it was made from: not trimmed)
         store_profile_dir(lk->st, list[i].id, dir, sizeof dir);
         if (fsx_join(hist, sizeof hist, dir, "history") != 0 || !fsx_is_dir(hist) || fsx_list(hist, &names, &cnt) != 0) continue;
         uint64_t freed = 0;
@@ -1311,6 +1398,7 @@ static long count_files(const char *dir)
 }
 
 // 1 if every file of the copy reads back as what was read to make it (same size, same CRC), and the copy has no file more
+// (folders are not compared: an empty one missing from a copy loses nothing, and a failed mkdir is caught when the copy is made)
 static int snapshot_check(const LkManifest *m, const char *tmp)
 {
     if (m->oom) return 0;

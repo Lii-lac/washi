@@ -140,6 +140,7 @@ static int b_commit(Backend *be)
 {
     FakeBe *f = F(be);
     if (tick(f, "commit")) return BE_ERR;
+    f->commits++;
     if (!f->is_mounted) return BE_ERR;
     char dst[FSX_PATH];
     fake_save_path(f, f->mounted, dst, sizeof dst);

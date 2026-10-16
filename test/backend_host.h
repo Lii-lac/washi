@@ -31,6 +31,7 @@ typedef struct {
     char root[400];       // be.save_root while mounted
     uint64_t mounted;
     int is_mounted;
+    long commits;         // how many commits were made (counted, so a test can say "a game with hundreds of files is not committed file by file")
     uint64_t uncommitted;
 
     FakeTitle titles[FAKE_MAX_TITLES];

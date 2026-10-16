@@ -369,9 +369,11 @@ static void collect_sigs(SigSet *out, const char *dir, int skip_staging)
 }
 
 // valuables = every file in every account save and every profile's current/ right now
+static int g_ro_run; // a read-only holder is left: the console's saves are thrown away on purpose, so they are not valuables
+
 static void collect_valuables(World *w, SigSet *out)
 {
-    collect_sigs(out, w->fb.committed, 0);
+    if (!g_ro_run) collect_sigs(out, w->fb.committed, 0);
     char dir[FSX_PATH];
     tpath(w, dir, sizeof dir, "profiles");
     char **names;
@@ -1854,6 +1856,35 @@ static int scen_give(World *w)
     return lk_unclaimed_give(&w->lk, leaf, w->maya);
 }
 
+static void set_ro(World *w, const char *id, int ro)
+{
+    Profile p;
+    CHECK(store_profile_load(&w->st, id, &p) == 0);
+    p.readonly = ro;
+    CHECK(store_profile_save(&w->st, &p) == 0);
+}
+
+// what a profile's current/ holds, as text (sizes and checksums)
+static char *profile_text(World *w, const char *id)
+{
+    Str s = {0};
+    str_add(&s, "");
+    char rel[FSX_PATH], cur[FSX_PATH];
+    snprintf(rel, sizeof rel, "profiles/%s/current", id);
+    tpath(w, cur, sizeof cur, rel);
+    snap_tree(&s, "CUR", cur, "", 0);
+    return s.buf;
+}
+
+// Alex is loaded, played in a game he has and one he hasn't saved before, and is then made read-only
+static void prep_ro_holder_played(World *w)
+{
+    lk_swap_to(&w->lk, w->alex);
+    fake_put(&w->fb, A, "save.dat", "A: played in a read-only session");
+    fake_put(&w->fb, D, "d.dat", "D: new progress in a read-only session");
+    set_ro(w, w->alex, 1);
+}
+
 static void crash_loop(const char *name, Scenario scen, void (*prep)(World *))
 {
     g_test = name;
@@ -1881,12 +1912,15 @@ static void crash_loop(const char *name, Scenario scen, void (*prep)(World *))
 
         SigSet valuables = {0};
         collect_valuables(&w, &valuables);
+        char *ro_before = g_ro_run ? profile_text(&w, w.alex) : NULL;
+        size_t ro_hist = g_ro_run ? history_count(&w, w.alex) : 0;
 
         fake_arm(&w.fb, n);
         rc = scen(&w);
         int crashed = w.fb.crashed;
         if (!crashed) { // the scenario finished before the nth call existed: we've covered every step
             CHECK_MSG(rc == LK_OK, "n=%ld finished with rc=%d %s", n, rc, w.lk.err);
+            free(ro_before);
             free(valuables.v);
             world_free(&w);
             noops++;
@@ -1929,6 +1963,14 @@ static void crash_loop(const char *name, Scenario scen, void (*prep)(World *))
         CHECK_MSG(unclaimed_count(&w) == want_unclaimed, "n=%ld unclaimed %zu != %zu (crash at '%s')", n, unclaimed_count(&w),
                   want_unclaimed, crash_name);
         CHECK_MSG(nothing_lost(&w, &valuables, why, sizeof why), "n=%ld after recovery: %s", n, why);
+        if (ro_before) { // the read-only profile was never touched, whatever the power did
+            char *now = profile_text(&w, w.alex);
+            CHECK_MSG(!strcmp(now, ro_before), "n=%ld (crash at '%s'): the read-only profile's saves changed", n, crash_name);
+            free(now);
+            CHECK_MSG(history_count(&w, w.alex) == ro_hist, "n=%ld (crash at '%s'): the read-only profile's history changed", n, crash_name);
+            CHECK_MSG(!w.st.state.discard, "n=%ld the discard mark was left in state.json", n);
+        }
+        free(ro_before);
 
         // a second pass of the same operation must be a clean no-op or at least not break anything
         free(valuables.v);
@@ -1937,6 +1979,249 @@ static void crash_loop(const char *name, Scenario scen, void (*prep)(World *))
     CHECK_MSG(noops == 1, "never reached a crash-free run");
     printf("    %s: power cut at %d different points, every one recovered with nothing lost\n", name, crashes);
     free(want);
+}
+
+
+// A game with hundreds of small files (Breath of the Wild has 400) is loaded in a handful of commits, not one per file: on the console every
+// commit costs tens of milliseconds, which made loading it take minutes.
+static void test_loading_commits_in_batches(void)
+{
+    g_test = "loading many files";
+    World w;
+    world_new(&w, 1);
+    for (int i = 0; i < 300; i++) {
+        char rel[40], txt[40];
+        snprintf(rel, sizeof rel, "slot/f%03d.sav", i);
+        snprintf(txt, sizeof txt, "file %d of a big game", i);
+        put_profile_file(&w, w.alex, A, rel, txt);
+    }
+    long before = w.fb.commits;
+    CHECK(lk_swap_to(&w.lk, w.alex) == LK_OK);
+    long used = w.fb.commits - before;
+    CHECK_MSG(used < 60, "300 files took %ld commits", used);
+    CHECK(sav_is(&w, A, "slot/f299.sav", "file 299 of a big game") && sav_is(&w, A, "slot/f000.sav", "file 0 of a big game"));
+    world_free(&w);
+}
+
+// ... but a save with a small journal is committed often enough that the files' own entries never overflow it.
+static void test_small_journal_many_files(void)
+{
+    g_test = "small journal";
+    World w;
+    world_new(&w, 1);
+    fake_title(&w.fb, A)->journal = 256 * 1024; // takes 128 KiB between commits
+    for (int i = 0; i < 100; i++) {
+        char rel[40];
+        snprintf(rel, sizeof rel, "d/f%03d.sav", i);
+        put_profile_file(&w, w.alex, A, rel, "tiny");
+    }
+    long before = w.fb.commits;
+    CHECK(lk_swap_to(&w.lk, w.alex) == LK_OK);
+    long used = w.fb.commits - before;
+    CHECK_MSG(used >= 10, "100 files on a small journal took only %ld commits", used);
+    CHECK(sav_is(&w, A, "d/f099.sav", "tiny"));
+    world_free(&w);
+}
+
+// ------------------------------------------------------------------------------------------------ read-only profiles
+
+// Alex is loaded as usual, then marked read-only; what he plays is thrown away when he is left, and nothing may write into him.
+static void test_readonly(void)
+{
+    g_test = "read-only profiles";
+    {   // (a) a swap away from him: his saves and history are exactly as they were, and Maya's are loaded
+        World w;
+        world_new(&w, 1);
+        CHECK(lk_swap_to(&w.lk, w.alex) == LK_OK);
+        char *before = profile_text(&w, w.alex);
+        size_t hist = history_count(&w, w.alex);
+        fake_put(&w.fb, A, "save.dat", "A: played in a read-only session");
+        fake_put(&w.fb, D, "d.dat", "D: new progress");
+        set_ro(&w, w.alex, 1);
+        CHECK(lk_profile_readonly(&w.lk, w.alex) == 1 && lk_profile_readonly(&w.lk, w.maya) == 0);
+        CHECK(lk_swap_to(&w.lk, w.maya) == LK_OK);
+        char *after = profile_text(&w, w.alex);
+        CHECK(!strcmp(before, after));
+        CHECK(history_count(&w, w.alex) == hist);
+        CHECK(bak_is(&w, w.alex, A, "save.dat", "A: alex progress"));
+        CHECK(!bak_has_title(&w, w.alex, D));
+        CHECK(sav_is(&w, A, "save.dat", "A: maya progress v2") && sav_is(&w, D, "d.dat", "D: maya's d")); // Maya's own play from before, loaded; nothing of Alex's session
+        CHECK(strcmp(w.st.state.holder, w.maya) == 0 && w.st.state.phase == PH_IDLE && !w.st.state.discard);
+        CHECK(unclaimed_count(&w) == 0);
+        free(before);
+        free(after);
+        world_free(&w);
+    }
+    {   // (b) a sign-out: the console is cleared without a backup, and without the "backup wasn't complete" refusal
+        World w;
+        world_new(&w, 1);
+        prep_ro_holder_played(&w);
+        world_restart(&w);
+        char *before = profile_text(&w, w.alex);
+        CHECK(lk_sign_out(&w.lk) == LK_OK);
+        char *after = profile_text(&w, w.alex);
+        CHECK(!strcmp(before, after));
+        CHECK(save_is_empty(&w, A) && save_is_empty(&w, D));
+        CHECK(!strcmp(w.st.state.holder, UNCLAIMED) && w.st.state.wiped && !w.st.state.discard);
+        free(before);
+        free(after);
+        world_free(&w);
+    }
+    {   // (c) the three ways of writing into a profile are refused, and change nothing
+        World w;
+        world_new(&w, 1);
+        prep_cleared(&w); // Alex signed out: a guest session
+        fake_put(&w.fb, A, "save.dat", "A: guest progress");
+        set_ro(&w, w.alex, 1);
+        char *all = snapshot_all(&w);
+        CHECK(lk_claim_guest(&w.lk, w.alex) == LK_ERR_READONLY);
+        CHECK(lk_rollback(&w.lk, w.alex, "x") == LK_ERR_READONLY);
+        char *all2 = snapshot_all(&w);
+        CHECK(!strcmp(all, all2));
+        free(all);
+        free(all2);
+        world_free(&w);
+        World u;
+        world_new(&u, 1);
+        prep_unclaimed_kept(&u);
+        set_ro(&u, u.maya, 1);
+        char leaf[64];
+        CHECK(newest_unclaimed(&u, leaf, sizeof leaf));
+        all = snapshot_all(&u);
+        CHECK(lk_unclaimed_give(&u.lk, leaf, u.maya) == LK_ERR_READONLY);
+        all2 = snapshot_all(&u);
+        CHECK(!strcmp(all, all2));
+        free(all);
+        free(all2);
+        world_free(&u);
+    }
+    {   // (d) the control: a profile that is not read-only still backs up, and turning the mark off brings that back
+        World w;
+        world_new(&w, 1);
+        CHECK(lk_swap_to(&w.lk, w.alex) == LK_OK);
+        fake_put(&w.fb, A, "save.dat", "A: played normally");
+        CHECK(lk_swap_to(&w.lk, w.maya) == LK_OK);
+        CHECK(bak_is(&w, w.alex, A, "save.dat", "A: played normally"));
+        set_ro(&w, w.alex, 1);
+        CHECK(lk_swap_to(&w.lk, w.alex) == LK_OK);
+        fake_put(&w.fb, A, "save.dat", "A: played, read-only");
+        CHECK(lk_swap_to(&w.lk, w.maya) == LK_OK);
+        CHECK(bak_is(&w, w.alex, A, "save.dat", "A: played normally")); // kept, not replaced
+        set_ro(&w, w.alex, 0);
+        CHECK(lk_swap_to(&w.lk, w.alex) == LK_OK);
+        fake_put(&w.fb, A, "save.dat", "A: played, no longer read-only");
+        CHECK(lk_swap_to(&w.lk, w.maya) == LK_OK);
+        CHECK(bak_is(&w, w.alex, A, "save.dat", "A: played, no longer read-only"));
+        world_free(&w);
+    }
+    {   // (e) a profile.json that is there but can't be read: nothing is guessed, nothing is changed
+        World w;
+        world_new(&w, 1);
+        CHECK(lk_swap_to(&w.lk, w.alex) == LK_OK);
+        fake_put(&w.fb, A, "save.dat", "A: played");
+        char rel[FSX_PATH], pj[FSX_PATH];
+        snprintf(rel, sizeof rel, "profiles/%s/profile.json", w.alex);
+        tpath(&w, pj, sizeof pj, rel);
+        FILE *f = fopen(pj, "wb");
+        CHECK(f != NULL);
+        if (f) {
+            fputs("{ this is not json", f);
+            fclose(f);
+        }
+        CHECK(lk_profile_readonly(&w.lk, w.alex) == -1);
+        char *all = snapshot_all(&w);
+        CHECK(lk_swap_to(&w.lk, w.maya) != LK_OK);
+        CHECK(lk_sign_out(&w.lk) != LK_OK);
+        char *all2 = snapshot_all(&w);
+        CHECK(!strcmp(all, all2));
+        free(all);
+        free(all2);
+        world_free(&w);
+    }
+    {   // (f) trimming earlier saves leaves a read-only profile's history alone
+        World w;
+        world_new(&w, 1);
+        for (int i = 0; i < 4; i++) {
+            char txt[40];
+            snprintf(txt, sizeof txt, "A: alex v%d", i);
+            CHECK(lk_swap_to(&w.lk, w.alex) == LK_OK);
+            fake_put(&w.fb, A, "save.dat", txt);
+            CHECK(lk_swap_to(&w.lk, w.maya) == LK_OK);
+        }
+        size_t hist = history_count(&w, w.alex);
+        CHECK(hist >= 3);
+        set_ro(&w, w.alex, 1);
+        CHECK(lk_history_trim(&w.lk, 1, 0, NULL, NULL) == LK_OK);
+        CHECK(history_count(&w, w.alex) == hist);
+        set_ro(&w, w.alex, 0);
+        CHECK(lk_history_trim(&w.lk, 1, 0, NULL, NULL) == LK_OK);
+        CHECK(history_count(&w, w.alex) == 1);
+        world_free(&w);
+    }
+    {   // (g) the mark is kept in profile.json only when set
+        World w;
+        world_new(&w, 1);
+        char rel[FSX_PATH], dir[FSX_PATH];
+        snprintf(rel, sizeof rel, "profiles/%s", w.alex);
+        tpath(&w, dir, sizeof dir, rel);
+        char *txt = read_in(dir, "profile.json");
+        CHECK(txt && !strstr(txt, "readonly"));
+        free(txt);
+        set_ro(&w, w.alex, 1);
+        txt = read_in(dir, "profile.json");
+        CHECK(txt && strstr(txt, "readonly"));
+        free(txt);
+        world_restart(&w);
+        Profile p;
+        CHECK(store_profile_load(&w.st, w.alex, &p) == 0 && p.readonly == 1);
+        set_ro(&w, w.alex, 0);
+        txt = read_in(dir, "profile.json");
+        CHECK(txt && !strstr(txt, "readonly"));
+        free(txt);
+        world_free(&w);
+    }
+}
+
+// A power cut in the middle of leaving a read-only profile, and the mark switched off before the app comes back: the journal decided
+// (discard), so recovery finishes the same way instead of failing a comparison with a backup that was never made.
+static void test_readonly_flag_flip(void)
+{
+    g_test = "read-only mark changed during a power cut";
+    int wiping = 0;
+    for (long n = 1; n < 2000; n++) {
+        World w;
+        world_new(&w, 1);
+        prep_ro_holder_played(&w);
+        world_restart(&w);
+        char *before = profile_text(&w, w.alex);
+        fake_arm(&w.fb, n);
+        int rc = scen_signout(&w);
+        if (!w.fb.crashed) {
+            CHECK(rc == LK_OK);
+            free(before);
+            world_free(&w);
+            break;
+        }
+        world_restart(&w);
+        if (w.st.state.phase == PH_WIPING) {
+            wiping++;
+            CHECK(w.st.state.discard == 1);
+            set_ro(&w, w.alex, 0); // someone switches the mark off before the app comes back
+            world_restart(&w);
+            lk_startup(&w.lk);
+            rc = lk_recover(&w.lk);
+            CHECK_MSG(rc == LK_OK, "n=%ld recovery failed: rc=%d %s", n, rc, w.lk.err);
+            CHECK(save_is_empty(&w, A) && save_is_empty(&w, D));
+            char *after = profile_text(&w, w.alex);
+            CHECK(!strcmp(before, after));
+            free(after);
+            CHECK(w.st.state.phase == PH_IDLE && !w.st.state.discard);
+        }
+        free(before);
+        world_free(&w);
+    }
+    CHECK(wiping > 0);
+    printf("    read-only mark switched off after a power cut at %d different points of a sign-out: finished the same way\n", wiping);
 }
 
 // ------------------------------------------------------------------------------------------------ main
@@ -2346,6 +2631,14 @@ int main(void)
     crash_loop("crash:sign-out after playing", scen_signout, prep_signout_after_play);
     crash_loop("crash:a guest keeps their play", scen_claim, prep_guest_played);
     crash_loop("crash:unclaimed saves given to a profile", scen_give, prep_unclaimed_kept);
+    g_ro_run = 1;
+    crash_loop("crash:swap away from a read-only profile", scen_swap_to_maya, prep_ro_holder_played);
+    crash_loop("crash:sign-out of a read-only profile", scen_signout, prep_ro_holder_played);
+    g_ro_run = 0;
+    test_readonly();
+    test_readonly_flag_flip();
+    test_loading_commits_in_batches();
+    test_small_journal_many_files();
 
     printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

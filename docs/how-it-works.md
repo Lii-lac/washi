@@ -160,6 +160,14 @@ the same. This is what lets big saves load.
 A game whose save is empty (never played, or cleared) is not backed up, so a profile only lists games its owner played. When
 that person's profile is loaded, those other games start fresh, which is right: they never played them.
 
+### Read-only profiles
+
+A profile can be marked read-only (`"readonly": 1` in its `profile.json`). Leaving it skips steps 2 to 4 of the swap, exactly as for a
+guest, and a sign-out only clears the console: with no backup to compare with, the check "every save equals the holder's backup" is
+turned off. The decision is written into the journal (`"discard"` in `state.json`) when the operation starts, so a power cut finishes
+it the same way even if the mark is switched off meanwhile. A `profile.json` that exists but can't be read stops the operation instead
+of guessing. Keeping guest play, roll back and giving unclaimed saves are refused for a read-only profile.
+
 ## Earlier saves and roll back
 
 Each backup that changes something moves the old `current/` into `history/<time>/`, and only the newest 5 are kept (Admin →
