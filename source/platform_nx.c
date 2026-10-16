@@ -164,6 +164,8 @@ static uint64_t nx_wait_input(Platform *p, int timeout_ms)
             else if ((down & BTN_PLUS) && (held & BTN_ZL)) down &= ~BTN_PLUS; // Plus with ZL held starts the chord; it isn't "edit"
             const uint64_t zz = BTN_ZL | BTN_ZR; // and A with ZL and ZR held is "pin"
             if ((held & zz) == zz && (down & BTN_A)) down = (down & ~(uint64_t)BTN_A) | BTN_PIN;
+            // With ZL and L held, D-pad up is part of the chord and moves nothing (it would step the cursor up while the code is being entered).
+            if ((held & (BTN_ZL | BTN_L)) == (BTN_ZL | BTN_L)) down &= ~(uint64_t)BTN_UP;
         }
         if (n->x_release) { // X acts when let go: alone it is X, with ZR pressed while it was held it is "purge" (ZR is not reported)
             if (down & BTN_X) {
