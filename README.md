@@ -80,6 +80,7 @@ Press <kbd>X</kbd> when you’re done. Washi backs you up, checks the copy and c
 ### Good to know
 
 - Only one account’s saves are swapped. Device, cache and system saves are left alone, and an admin can mark a game as shared.
+- An admin can mark a profile **read-only** (Admin, Profiles, the profile). It keeps its saves exactly as they are: what anyone plays as it is thrown away when they sign out or someone else loads, and its name and picture are locked. Good for a profile of finished saves.
 - If someone starts a game without opening Washi, that play goes to whoever is still loaded. Tell people to sign out.
 - If the account has Nintendo Switch Online cloud saves, turn off *Automatic Save-Data Download* in System Settings. Otherwise the console may pull a cloud copy over a swapped-in save.
 - Custom firmware has risks, bans included. Washi doesn’t change them.
