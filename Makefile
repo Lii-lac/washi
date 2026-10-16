@@ -46,7 +46,7 @@ INCLUDES	:=	source source/gfx
 
 APP_TITLE	:=	Washi
 APP_AUTHOR	:=	Esports Club
-APP_VERSION	:=	1.0.0
+APP_VERSION	:=	1.1.0
 
 #---------------------------------------------------------------------------------
 # options for code generation
